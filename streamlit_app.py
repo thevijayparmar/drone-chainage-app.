@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import re, math, zipfile, io, xml.etree.ElementTree as ET
 import plotly.graph_objects as go
@@ -283,4 +282,3 @@ if up_srt and up_kml:
                 "all_bulk_outputs.zip",
                 mime="application/zip"
             )
-```
