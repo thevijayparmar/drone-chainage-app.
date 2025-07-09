@@ -261,4 +261,4 @@ if st.session_state.proceed:
         st.download_button("Download all bulk outputs ZIP",B.read(),
                            "all_bulk_outputs.zip","application/zip")
 
-    st.success("✅ All done. - Vijay Parmar")
+    st.success("✅ All done. -Vijay Parmar")
