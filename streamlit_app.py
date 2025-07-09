@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import re, math, zipfile, io, xml.etree.ElementTree as ET
 import plotly.graph_objects as go
@@ -33,11 +34,11 @@ def parse_srt(uploaded):
             L = lines[j]
             if m := re.search(r"\[latitude:\s*([0-9.\-]+)", L): lat = float(m.group(1))
             if m := re.search(r"\[longitude:\s*([0-9.\-]+)", L): lon = float(m.group(1))
-            if m := re.search(r"\[altitude:\s*([0-9.\-]+)", L): alt = float(m.group(1))
+            if m := re.search(r"\[altitude:\s*([0-9.\-]+)",  L): alt = float(m.group(1))
             if m := re.search(r"\d{4}-\d{2}-\d{2}\s*([0-9:]{8})", L): tim = m.group(1)
             j += 1
         if lat is not None and lon is not None:
-            blocks.append({ 'idx': idx, 'range': rng, 'lat': lat, 'lon': lon, 'alt': alt, 'tim': tim })
+            blocks.append({'idx': idx, 'range': rng, 'lat': lat, 'lon': lon, 'alt': alt, 'tim': tim})
         i = j + 1
     return blocks
 
@@ -89,7 +90,7 @@ def kml_from_markers(markers):
             f"<Point><coordinates>{lon},{lat},0</coordinates></Point></Placemark>"
         )
     lines.append("</Document></kml>")
-    return "\n".join(lines)
+    return '\n'.join(lines)
 
 @st.cache_data
 def project_to_line(pt, coords, cumd):
@@ -117,13 +118,13 @@ def kml_from_srt(blocks, cumd, si, ei):
         f"<Point><coordinates>{e['lon']:.6f},{e['lat']:.6f},{e['alt']:.2f}</coordinates></Point></Placemark>"
     )
     lines.append("</Document></kml>")
-    return "\n".join(lines)
+    return '\n'.join(lines)
 
 @st.cache_data
-def srt_zip(blocks, prefix):
+def srt_zip(blocks, prefix, chain_vals=None):
     buf = io.BytesIO()
     z = zipfile.ZipFile(buf, 'w')
-    cum = cumulative_dist([(b['lat'], b['lon']) for b in blocks])
+    cum = chain_vals if chain_vals is not None else cumulative_dist([(b['lat'], b['lon']) for b in blocks])
     mapping = {
         f"{prefix}_01_Latitude.srt":     [f"{b['lat']:.6f}" for b in blocks],
         f"{prefix}_02_Longitude.srt":    [f"{b['lon']:.6f}" for b in blocks],
@@ -133,9 +134,8 @@ def srt_zip(blocks, prefix):
         f"{prefix}_06_Chainage.srt":     [f"{d:.3f} km" for d in cum]
     }
     for fn, txts in mapping.items():
-        content = "\n\n".join(
-            f"{blocks[i]['idx']}\n{blocks[i]['range']}\n{txts[i]}"
-            for i in range(len(blocks))
+        content = '\n\n'.join(
+            f"{blocks[i]['idx']}\n{blocks[i]['range']}\n{txts[i]}" for i in range(len(blocks))
         )
         z.writestr(fn, content)
     z.close()
@@ -152,121 +152,135 @@ with col2:
     up_kml = st.file_uploader("Full-chainage KML", type=['kml', 'xml'])
 
 if up_srt and up_kml:
-    # Base chainage coordinates
+    # Base chainage
     base_chain = parse_kml_2d(up_kml)
+    # Reverse state stored in session
     if 'chain_rev' not in st.session_state:
         st.session_state.chain_rev = False
 
-    # Apply reversal if needed
+    # Step 2: Generate & Download Markers
     chain_coords = list(reversed(base_chain)) if st.session_state.chain_rev else base_chain
     cum_chain = cumulative_dist(chain_coords)
-
-    # Step 2: Generate & download markers
     if st.button("▶ Generate & Download 50 m Markers KML"):
-        markers = generate_markers(chain_coords, cum_chain, 0.05)
-        kml_m = kml_from_markers(markers)
-        st.download_button("Download markers_50m.kml", kml_m, "markers_50m.kml",
-                           mime="application/vnd.google-earth.kml+xml")
+        markers = generate_markers(chain_coords, cum_chain)
+        st.download_button(
+            "Download markers_50m.kml",
+            kml_from_markers(markers),
+            "markers_50m.kml",
+            mime="application/vnd.google-earth.kml+xml"
+        )
 
     # Step 3: Confirm direction
-    dir_ok = st.radio("Are 50 m markers direction correct?", ["Yes", "Reverse Needed"])
+    dir_ok = st.radio(
+        "Are 50 m markers direction correct?",
+        ["Yes", "Reverse Needed"],
+        index=0
+    )
     if dir_ok == "Reverse Needed":
-        st.session_state.chain_rev = not st.session_state.chain_rev
-        st.experimental_rerun()
+        st.session_state.chain_rev = True
+    else:
+        st.session_state.chain_rev = False
 
-    # Once confirmed:
-    # Step 4: Parse SRT, project start/end
-    blocks0 = parse_srt(up_srt)
-    coords0 = [(b['lat'], b['lon']) for b in blocks0]
-    alts0   = [b['alt'] for b in blocks0]
-    cum0    = cumulative_dist(coords0)
-    si0, start_km = project_to_line(coords0[0], chain_coords, cum_chain)
-    ei0, end_km   = project_to_line(coords0[-1], chain_coords, cum_chain)
-
-    # Shift SRT chainage so stationing starts at detected start
-    offset = start_km
-    cum0_shifted = [offset + d for d in cum0]
-
-    st.write(f"Start → {start_km:.3f} km, End → {end_km:.3f} km, Total → {cum0[-1]*1000:.1f} m")
-
-    # Step 5: Confirm SRT direction
-    srt_dir = st.radio("Is SRT start→end correct?", ["Yes", "Reverse Needed"], key="srt_dir")
-    if srt_dir == "Reverse Needed":
-        blocks0.reverse()
-        coords0.reverse()
-        alts0.reverse()
-        cum0 = cumulative_dist(coords0)
-        cum0_shifted = [offset + d for d in cum0]
+    # Only proceed when "Yes" selected
+    if dir_ok == "Yes":
+        # Step 4: Parse SRT + project
+        blocks0 = parse_srt(up_srt)
+        coords0 = [(b['lat'], b['lon']) for b in blocks0]
+        alts0   = [b['alt'] for b in blocks0]
+        cum0    = cumulative_dist(coords0)
         si0, start_km = project_to_line(coords0[0], chain_coords, cum_chain)
         ei0, end_km   = project_to_line(coords0[-1], chain_coords, cum_chain)
-        st.experimental_rerun()
+        # Shift chainage so start maps to zero-based offset
+        cum0_shifted = [start_km + d for d in cum0]
+        st.write(
+            f"Start → {start_km:.3f} km, "
+            f"End → {end_km:.3f} km, "
+            f"Total → {cum0[-1]*1000:.1f} m"
+        )
 
-    # Step 6: Visualize 3D
-    fig = go.Figure()
-    fig.add_trace(go.Scatter3d(
-        x=[c[1] for c in chain_coords],
-        y=[c[0] for c in chain_coords],
-        z=[0]*len(chain_coords),
-        line=dict(color='gray'), name='Chainage Line'
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=[c[1] for c in coords0],
-        y=[c[0] for c in coords0],
-        z=alts0,
-        line=dict(color='red'), name='SRT Route'
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=[coords0[0][1]],
-        y=[coords0[0][0]],
-        z=[alts0[0]],
-        mode='markers+text',
-        text=[f"Start {start_km:.3f} km"],
-        marker=dict(size=5, color='green'),
-        name='Start'
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=[coords0[-1][1]],
-        y=[coords0[-1][0]],
-        z=[alts0[-1]],
-        mode='markers+text',
-        text=[f"End {end_km:.3f} km"],
-        marker=dict(size=5, color='blue'),
-        name='End'
-    ))
-    fig.update_layout(
-        scene=dict(xaxis_title='Lon', yaxis_title='Lat', zaxis_title='Alt (m)'),
-        height=600
-    )
-    st.plotly_chart(fig)
+        # Step 5: Confirm SRT direction
+        srt_dir = st.radio("Is SRT start→end correct?", ["Yes","Reverse Needed"], key="srt_dir")
+        if srt_dir == "Reverse Needed":
+            blocks0.reverse()
+            coords0.reverse()
+            alts0.reverse()
+            cum0 = cumulative_dist(coords0)
+            cum0_shifted = [start_km + d for d in cum0]
+            si0, start_km = project_to_line(coords0[0], chain_coords, cum_chain)
+            ei0, end_km   = project_to_line(coords0[-1], chain_coords, cum_chain)
 
-    # Step 7: Export initial KML and SRT ZIP
-    kml0 = kml_from_srt(blocks0, cum0_shifted, si0, ei0)
-    st.download_button("Download initial_srt_route.kml", kml0, "initial_srt_route.kml",
-                       mime="application/vnd.google-earth.kml+xml")
-    zip0 = srt_zip(blocks0, "initial")
-    st.download_button("Download initial SRT files ZIP", zip0, "initial_srt_files.zip",
-                       mime="application/zip")
+        # Step 6: Visualize 3D
+        fig = go.Figure()
+        fig.add_trace(go.Scatter3d(
+            x=[c[1] for c in chain_coords],
+            y=[c[0] for c in chain_coords],
+            z=[0]*len(chain_coords),
+            line=dict(color='gray'), name='Chainage'
+        ))
+        fig.add_trace(go.Scatter3d(
+            x=[c[1] for c in coords0],
+            y=[c[0] for c in coords0],
+            z=alts0,
+            line=dict(color='red'), name='SRT'
+        ))
+        fig.add_trace(go.Scatter3d(
+            x=[coords0[0][1]], y=[coords0[0][0]], z=[alts0[0]],
+            mode='markers+text', text=[f"Start {start_km:.3f} km"],
+            marker=dict(size=5,color='green'), name='Start'
+        ))
+        fig.add_trace(go.Scatter3d(
+            x=[coords0[-1][1]], y=[coords0[-1][0]], z=[alts0[-1]],
+            mode='markers+text', text=[f"End {end_km:.3f} km"],
+            marker=dict(size=5,color='blue'), name='End'
+        ))
+        fig.update_layout(
+            scene=dict(xaxis_title='Lon', yaxis_title='Lat', zaxis_title='Alt (m)'),
+            height=600
+        )
+        st.plotly_chart(fig)
 
-    # Step 8: Bulk processing
-    up_bulk = st.file_uploader("Upload additional .srt files (bulk)", type='srt', accept_multiple_files=True)
-    if up_bulk:
-        all_buf = io.BytesIO()
-        zall = zipfile.ZipFile(all_buf, 'w')
-        for bf in up_bulk:
-            name = bf.name.rsplit('.', 1)[0]
-            blks = parse_srt(bf)
-            crd = [(b['lat'], b['lon']) for b in blks]
-            altb = [b['alt'] for b in blks]
-            cumb = cumulative_dist(crd)
-            si, sk = project_to_line(crd[0], chain_coords, cum_chain)
-            ei, ek = project_to_line(crd[-1], chain_coords, cum_chain)
-            offset_b = sk
-            cumb_shift = [offset_b + d for d in cumb]
-            kmlb = kml_from_srt(blks, cumb_shift, si, ei)
-            zall.writestr(f"{name}_route.kml", kmlb)
-            for fn in srt_zip(blks, name):  # reusing srt_zip to get filenames
-                zall.write(fn)
-        zall.close()
-        all_buf.seek(0)
-        st.download_button("Download all bulk outputs ZIP", all_buf.read(),
-                           "all_bulk_outputs.zip", mime="application/zip")
+        # Step 7: Export initial files
+        st.download_button(
+            "Download initial_srt_route.kml",
+            kml_from_srt(blocks0, cum0_shifted, si0, ei0),
+            "initial_srt_route.kml",
+            mime="application/vnd.google-earth.kml+xml"
+        )
+        st.download_button(
+            "Download initial SRT files ZIP",
+            srt_zip(blocks0, "initial", chain_vals=cum0_shifted),
+            "initial_srt_files.zip",
+            mime="application/zip"
+        )
+
+        # Step 8: Bulk processing
+        up_bulk = st.file_uploader("Upload additional .srt files (bulk)", type='srt', accept_multiple_files=True)
+        if up_bulk:
+            all_buf = io.BytesIO()
+            zall    = zipfile.ZipFile(all_buf, 'w')
+            for bf in up_bulk:
+                name = bf.name.rsplit('.', 1)[0]
+                blks  = parse_srt(bf)
+                crd   = [(b['lat'],b['lon']) for b in blks]
+                altb  = [b['alt'] for b in blks]
+                cumb  = cumulative_dist(crd)
+                si_b, sk = project_to_line(crd[0], chain_coords, cum_chain)
+                ei_b, ek = project_to_line(crd[-1],chain_coords,cum_chain)
+                cumb_shifted = [sk + d for d in cumb]
+                kmlb = kml_from_srt(blks, cumb_shifted, si_b, ei_b)
+                zall.writestr(f"{name}_route.kml", kmlb)
+                # add SRTs
+                zip_bytes = srt_zip(blks, name, chain_vals=cumb_shifted)
+                # unzip those bytes in memory and re-add files
+                with zipfile.ZipFile(io.BytesIO(zip_bytes)) as inner_z:
+                    for inner_name in inner_z.namelist():
+                        zall.writestr(inner_name, inner_z.read(inner_name))
+            zall.close()
+            all_buf.seek(0)
+            st.download_button(
+                "Download all bulk outputs ZIP",
+                all_buf.read(),
+                "all_bulk_outputs.zip",
+                mime="application/zip"
+            )
+```
